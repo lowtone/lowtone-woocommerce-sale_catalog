@@ -18,28 +18,56 @@
 
 namespace lowtone\woocommerce\sale_catalog {
 
-	add_filter("pre_get_posts", function($query) {
-		if (!isSaleCatalog())
-			return $query;
+	// Add rewrite rules
 
+	add_action("init", function() {
+		if (NULL === ($page = saleCatalogPage()))
+			return;
+
+		addRewriteRules($page);
+
+		add_rewrite_tag('%sale%','([^&]+)');
+	});
+
+	// Modify query
+
+	add_filter("pre_get_posts", function($query) {
 		if (!$query->is_main_query())
 			return $query;
 
-		global $woocommerce;
+		if (!$query->get("sale"))
+			return $query;
 
-		$query->set("pagename", "");
-
-		$woocommerce->query->product_query($query);
-
-		$productsOnSale = woocommerce_get_product_ids_on_sale();
-
-		if ($postIn = $query->get("post__in"))
-			$productsOnSale = array_intersect_key($productsOnSale, $postIn);
-
-		$query->set("post__in", $productsOnSale);
+		$query->set("meta_query", array(
+				array(
+					"key" => "_visibility",
+					"value" => array("catalog", "visible"),
+					"compare" => "IN",
+				),
+				array(
+					"key" => "_sale_price",
+					"value" => 0,
+					"compare" => ">",
+					"type" => "NUMERIC",
+				)
+			));
 		
 		return $query;
 	}, 0);
+
+	// Set title on sale page
+
+	add_filter("woocommerce_page_title", function($title) {
+		if (!isSaleCatalog())
+			return $title;
+
+		if (NULL === ($page = saleCatalogPage()))
+			return $title;
+
+		return $page->post_title;
+	});
+
+	// Add sale page selection
 
 	add_filter("woocommerce_page_settings", function($settings) {
 		$offset = 1;
@@ -67,20 +95,55 @@ namespace lowtone\woocommerce\sale_catalog {
 		return $settings;
 	});
 
+	// Update & flush rewrite rules
+
+	add_action("update_option_lowtone_woocommerce_sale_catalog_page_id", function($old, $new) {
+		if (NULL === ($page = get_post($new)))
+			return;
+
+		addRewriteRules($page);
+
+		flush_rewrite_rules();
+	}, 10, 2);
+
+	// Register textdomain
+	
+	add_action("plugins_loaded", function() {
+		load_plugin_textdomain("lowtone_woocommerce_sale_catalog", false, basename(__DIR__) . "/assets/languages");
+	});
+
 	// Functions
 	
 	function isSaleCatalog() {
-		return apply_filters("is_sale_catalog", is_page(getSaleCatalogPageId()));
+		wp_reset_query();
+
+		return is_archive() && get_query_var("sale");
 	}
 
-	function getSaleCatalogPageId() {
+	function saleCatalogPageId() {
 		return get_option("lowtone_woocommerce_sale_catalog_page_id") ?: NULL;
 	}
 
-	/*add_filter("pre_get_posts", function($query) {
-		var_dump($query);exit;
+	function saleCatalogPage() {
+		if (NULL === ($pageId = saleCatalogPageId()))
+			return;
+
+		return get_post($pageId) ?: NULL;
+	}
+
+	function addRewriteRules($page) {
+		global $wp_rewrite;
+
+		$saleSlug = $page->post_name;
+
+		add_rewrite_rule("{$saleSlug}/?$", ($urlBase = "index.php?post_type=product&sale=1"), "top");
 		
-		return $query;
-	}, 9999);*/
+		$feeds = "(" . trim(implode("|", $wp_rewrite->feeds)) . ")";
+		
+		add_rewrite_rule("{$saleSlug}/feed/{$feeds}/?$", "{$urlBase}&feed=\$matches[1]", "top");
+		add_rewrite_rule("{$saleSlug}/{$feeds}/?$", "{$urlBase}&feed=\$matches[1]", "top");
+			
+		add_rewrite_rule("{$saleSlug}/{$wp_rewrite->pagination_base}/([0-9]{1,})/?$", "{$urlBase}&paged=\$matches[1]", "top");
+	}
 
 }
